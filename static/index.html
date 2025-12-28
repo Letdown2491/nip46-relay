@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="{{.Icon}}" type="image/x-icon" />
+    <title>{{.Name}}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap");
+        body {
+            font-family: "Inter", sans-serif;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        }
+    </style>
+</head>
+<body class="text-white flex flex-col">
+    <div class="flex-grow flex flex-col items-center justify-center px-4">
+        <div class="max-w-2xl w-full">
+            <div class="flex flex-col items-center justify-center mb-8 text-center">
+                {{if .Icon}}
+                <a href="{{.Icon}}">
+                    <img src="{{.Icon}}" class="w-24 h-24 rounded-full border-2 border-purple-500 mb-2" />
+                </a>
+                {{end}}
+                <h1 class="text-3xl font-bold text-purple-400">{{.Name}}</h1>
+                <p class="text-lg text-gray-300">{{.Description}}</p>
+            </div>
+
+            <div class="bg-gray-800/50 backdrop-blur p-6 rounded-lg shadow-lg mb-6 border border-gray-700">
+                <h2 class="text-2xl font-bold text-purple-400 mb-4">Connection</h2>
+                <table class="w-full">
+                    <tbody>
+                        <tr>
+                            <td class="font-semibold py-2">WebSocket:</td>
+                            <td class="text-gray-300"><code class="bg-gray-900 px-2 py-1 rounded">{{.URL}}</code></td>
+                        </tr>
+                        {{if .PubKey}}
+                        <tr>
+                            <td class="font-semibold py-2">Operator:</td>
+                            <td><a href="nostr:{{.PubKey}}" class="text-purple-400 hover:underline">View on Nostr</a></td>
+                        </tr>
+                        {{end}}
+                        {{if .Contact}}
+                        <tr>
+                            <td class="font-semibold py-2">Contact:</td>
+                            <td class="text-gray-300">{{.Contact}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="bg-gray-800/50 backdrop-blur p-6 rounded-lg shadow-lg mb-6 border border-gray-700">
+                <h2 class="text-2xl font-bold text-purple-400 mb-4">About</h2>
+                <table class="w-full">
+                    <tbody>
+                        <tr>
+                            <td class="font-semibold py-2">Purpose:</td>
+                            <td class="text-gray-300">NIP-46 Remote Signing</td>
+                        </tr>
+                        <tr>
+                            <td class="font-semibold py-2">Supported NIPs:</td>
+                            <td class="text-gray-300">{{.SupportedNIPs}}</td>
+                        </tr>
+                        <tr>
+                            <td class="font-semibold py-2">Version:</td>
+                            <td class="text-gray-300">{{.Version}}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <footer class="w-full text-center py-6 bg-gray-900/50 mt-auto border-t border-gray-800">
+        <p class="text-gray-400">
+            Use with <a href="https://nsec.app" class="text-purple-400 hover:underline">nsec.app</a>,
+            <a href="https://github.com/letdown2491/signet" class="text-purple-400 hover:underline">Signet</a>,
+            or any NIP-46 compatible signer.
+        </p>
+    </footer>
+</body>
+</html>

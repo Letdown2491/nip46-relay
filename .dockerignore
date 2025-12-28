@@ -1,0 +1,34 @@
+# Git
+.git/
+.gitignore
+
+# Docker
+.dockerignore
+Dockerfile
+docker-compose.yml
+
+# Data directories
+data/
+nip46-relay-data/
+
+# Binary
+nip46-relay
+
+# Environment
+.env
+.env.example
+
+# Documentation
+README.md
+Caddyfile.example
+LICENSE
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

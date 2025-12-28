@@ -1,0 +1,24 @@
+services:
+  nip46-relay:
+    build: .
+    container_name: nip46-relay
+    restart: unless-stopped
+    ports:
+      - "3334:3334"
+    environment:
+      RELAY_NAME: "NIP-46 Relay"
+      RELAY_DESCRIPTION: "A NIP-46 remote signing relay"
+      RELAY_URL: "wss://your-domain.com"
+      RELAY_PORT: ":3334"
+      WORKING_DIR: "/app/data"
+      KEEP_IN_MINUTES: 10
+      ACCEPT_WINDOW_IN_MINUTES: 1
+      RATE_LIMIT_PER_MINUTE: 100
+      # RELAY_PUBKEY: "your_hex_pubkey"
+      # RELAY_CONTACT: "your@email.com"
+      # RELAY_ICON: "https://your-domain.com/icon.png"
+    volumes:
+      - nip46_data:/app/data
+
+volumes:
+  nip46_data:

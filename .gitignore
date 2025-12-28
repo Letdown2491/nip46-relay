@@ -1,0 +1,20 @@
+# Binaries
+nip46-relay
+*.exe
+
+# Data directory
+data/
+nip46-relay-data/
+
+# Environment
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

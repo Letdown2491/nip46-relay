@@ -1,0 +1,15 @@
+[Unit]
+Description=NIP-46 Relay
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+WorkingDirectory=/home/YOUR_USERNAME/nip46-relay
+ExecStart=/home/YOUR_USERNAME/nip46-relay/nip46-relay
+EnvironmentFile=/home/YOUR_USERNAME/nip46-relay/.env
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
