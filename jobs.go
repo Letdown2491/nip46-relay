@@ -13,7 +13,6 @@ func cleanDatabase() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		log.Println("Running cleaner...")
 		pruneOldEvents()
 	}
 }
@@ -49,5 +48,4 @@ func deleteEvent(ctx context.Context, ev *nostr.Event) {
 			return
 		}
 	}
-	log.Printf("event %s has been pruned", ev.ID)
 }

@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	badgerdb "github.com/dgraph-io/badger/v4"
 	"github.com/fiatjaf/eventstore/badger"
 	"github.com/fiatjaf/khatru"
 	"github.com/nbd-wtf/go-nostr"
@@ -68,6 +69,12 @@ func main() {
 	mainDB := &badger.BadgerBackend{
 		Path:     dbPath,
 		MaxLimit: 100,
+		BadgerOptionsModifier: func(opts badgerdb.Options) badgerdb.Options {
+			// Disable fsync on every write - significantly reduces write latency
+			// Safe for ephemeral data that expires in minutes
+			opts.SyncWrites = false
+			return opts
+		},
 	}
 	mainDB.Init()
 
