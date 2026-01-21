@@ -2,15 +2,23 @@ package main
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-// RateLimiter implements a simple sliding window rate limiter per key
+// keyLimiter holds rate limit state for a single key with its own lock
+type keyLimiter struct {
+	mu       sync.Mutex
+	requests []time.Time
+	lastUsed atomic.Int64 // Unix timestamp for cleanup decisions
+}
+
+// RateLimiter implements a sliding window rate limiter with per-key locking
+// Uses sync.Map to allow concurrent access to different keys without contention
 type RateLimiter struct {
-	mu       sync.RWMutex
-	requests map[string][]time.Time
-	limit    int
-	window   time.Duration
+	keys   sync.Map // map[string]*keyLimiter
+	limit  int
+	window time.Duration
 }
 
 // NewRateLimiter creates a new rate limiter
@@ -18,9 +26,8 @@ type RateLimiter struct {
 // window: time window duration
 func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 	rl := &RateLimiter{
-		requests: make(map[string][]time.Time),
-		limit:    limit,
-		window:   window,
+		limit:  limit,
+		window: window,
 	}
 
 	// Start cleanup goroutine
@@ -30,19 +37,26 @@ func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 }
 
 // Allow checks if a request from the given key should be allowed
+// Uses per-key locking so different keys don't block each other
 func (rl *RateLimiter) Allow(key string) bool {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-
 	now := time.Now()
 	windowStart := now.Add(-rl.window)
 
-	// Get existing requests for this key
-	requests := rl.requests[key]
+	// Get or create limiter for this key
+	val, _ := rl.keys.LoadOrStore(key, &keyLimiter{})
+	kl := val.(*keyLimiter)
+
+	// Update last used timestamp (atomic, no lock needed)
+	kl.lastUsed.Store(now.Unix())
+
+	// Lock only this key's limiter
+	kl.mu.Lock()
+	defer kl.mu.Unlock()
 
 	// Filter to only requests within the window
-	var validRequests []time.Time
-	for _, t := range requests {
+	// Reuse slice capacity to reduce allocations
+	validRequests := kl.requests[:0]
+	for _, t := range kl.requests {
 		if t.After(windowStart) {
 			validRequests = append(validRequests, t)
 		}
@@ -50,40 +64,39 @@ func (rl *RateLimiter) Allow(key string) bool {
 
 	// Check if limit exceeded
 	if len(validRequests) >= rl.limit {
-		rl.requests[key] = validRequests
+		kl.requests = validRequests
 		return false
 	}
 
 	// Add current request
-	validRequests = append(validRequests, now)
-	rl.requests[key] = validRequests
+	kl.requests = append(validRequests, now)
 
 	return true
 }
 
-// cleanup periodically removes old entries to prevent memory leaks
+// cleanup periodically removes stale keys to prevent memory leaks
+// Runs without blocking Allow() calls on active keys
 func (rl *RateLimiter) cleanup() {
-	ticker := time.NewTicker(5 * time.Minute)
+	ticker := time.NewTicker(2 * time.Minute)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		rl.mu.Lock()
 		now := time.Now()
-		windowStart := now.Add(-rl.window)
+		staleThreshold := now.Add(-rl.window * 2).Unix()
 
-		for key, requests := range rl.requests {
-			var validRequests []time.Time
-			for _, t := range requests {
-				if t.After(windowStart) {
-					validRequests = append(validRequests, t)
-				}
+		// Collect stale keys first (no locks held during iteration)
+		var staleKeys []string
+		rl.keys.Range(func(key, val any) bool {
+			kl := val.(*keyLimiter)
+			if kl.lastUsed.Load() < staleThreshold {
+				staleKeys = append(staleKeys, key.(string))
 			}
-			if len(validRequests) == 0 {
-				delete(rl.requests, key)
-			} else {
-				rl.requests[key] = validRequests
-			}
+			return true
+		})
+
+		// Delete stale keys
+		for _, key := range staleKeys {
+			rl.keys.Delete(key)
 		}
-		rl.mu.Unlock()
 	}
 }
