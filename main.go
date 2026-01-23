@@ -17,6 +17,7 @@ import (
 	"github.com/fiatjaf/eventstore/badger"
 	"github.com/fiatjaf/khatru"
 	"github.com/nbd-wtf/go-nostr"
+	"github.com/nbd-wtf/go-nostr/nip11"
 )
 
 var (
@@ -62,6 +63,20 @@ func main() {
 	relay.Info.URL = config.RelayURL
 	relay.Info.Banner = config.RelayBanner
 	relay.Info.SupportedNIPs = []any{1, 46}
+	relay.Info.Limitation = &nip11.RelayLimitationDocument{
+		MaxMessageLength: 131072, // 128 KB
+		MaxSubscriptions: 20,
+		MaxEventTags:     100,
+		MaxContentLength: 65536, // 64 KB
+		MaxLimit:         100,
+		RestrictedWrites: true,
+	}
+	relay.Info.Retention = []*nip11.RelayRetentionDocument{
+		{
+			Kinds: [][]int{{24133, 24135}},
+			Time:  int64(config.KeepNotesFor * 60),
+		},
+	}
 
 	dbPath := path.Join(config.WorkingDirectory, "database")
 	log.Printf("Data directory: %s\n", dbPath)
