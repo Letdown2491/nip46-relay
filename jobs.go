@@ -5,10 +5,18 @@ import (
 	"log"
 	"time"
 
+	"github.com/fiatjaf/eventstore/badger"
 	"github.com/nbd-wtf/go-nostr"
 )
 
 func cleanDatabase() {
+	// The in-memory store self-evicts; only the persistent badger backend needs
+	// an external prune + value-log GC cycle.
+	b, ok := store.(*badger.BadgerBackend)
+	if !ok {
+		return
+	}
+
 	// Run cleanup more frequently but with targeted queries
 	// This reduces the batch size and spreads the load
 	ticker := time.NewTicker(time.Duration(config.KeepNotesFor/2+1) * time.Minute)
@@ -16,6 +24,25 @@ func cleanDatabase() {
 
 	for range ticker.C {
 		pruneOldEvents()
+		// Reclaim disk space from Badger's value log. Deleting events only
+		// writes tombstones; without GC the .vlog files grow unbounded under
+		// this relay's write-then-delete (ephemeral event) workload.
+		runValueLogGC(b)
+	}
+}
+
+// runValueLogGC repeatedly rewrites Badger value-log files until there is
+// nothing left worth reclaiming (RunValueLogGC returns a non-nil error, e.g.
+// badger.ErrNoRewrite). Each successful call rewrites at most one file.
+func runValueLogGC(b *badger.BadgerBackend) {
+	if b == nil || b.DB == nil {
+		return
+	}
+	for {
+		if err := b.RunValueLogGC(0.5); err != nil {
+			// ErrNoRewrite (nothing to collect) is the normal stop condition.
+			return
+		}
 	}
 }
 
@@ -32,8 +59,14 @@ func pruneOldEvents() {
 		Until: &cutoff,
 	}
 
-	var toDelete []*nostr.Event
-
+	// Delete events as they stream in. Badger uses MVCC, so deleting while the
+	// query's read iterator is still open is safe, and avoids buffering the
+	// entire expired set in memory.
+	//
+	// The eventstore producer goroutine sends without selecting on ctx, so we
+	// must always drain the channel to completion (even after a timeout) to
+	// avoid leaking it; we simply stop issuing deletes once ctx is done.
+	timedOut := false
 	for _, qe := range relay.QueryEvents {
 		ch, err := qe(ctx, filter)
 		if err != nil {
@@ -41,26 +74,16 @@ func pruneOldEvents() {
 			continue
 		}
 
-		// Collect events to delete
 		for ev := range ch {
-			toDelete = append(toDelete, ev)
-		}
-	}
-
-	if len(toDelete) == 0 {
-		return
-	}
-
-	// Delete collected events
-	deleted := 0
-	for _, ev := range toDelete {
-		// Check context in case we're taking too long
-		if ctx.Err() != nil {
-			log.Printf("cleanup timeout: deleted %d/%d events", deleted, len(toDelete))
-			return
-		}
-		if deleteEvent(ctx, ev) {
-			deleted++
+			if timedOut {
+				continue // drain remaining events, but stop deleting
+			}
+			if ctx.Err() != nil {
+				log.Printf("cleanup timeout while pruning expired events")
+				timedOut = true
+				continue
+			}
+			deleteEvent(ctx, ev)
 		}
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"strings"
 	"syscall"
 	"time"
 
@@ -20,9 +21,22 @@ import (
 	"github.com/nbd-wtf/go-nostr/nip11"
 )
 
+// EventStore is the minimal backend interface the relay needs. Both the
+// in-memory store and the persistent badger backend satisfy it.
+type EventStore interface {
+	Init() error
+	SaveEvent(context.Context, *nostr.Event) error
+	QueryEvents(context.Context, nostr.Filter) (chan *nostr.Event, error)
+	DeleteEvent(context.Context, *nostr.Event) error
+	Close()
+}
+
 var (
 	relay  *khatru.Relay
 	config Config
+
+	// Active event store backend (in-memory or badger), initialized in main.
+	store EventStore
 
 	//go:embed static/index.html
 	landingTempl []byte
@@ -78,41 +92,41 @@ func main() {
 		},
 	}
 
-	dbPath := path.Join(config.WorkingDirectory, "database")
-	log.Printf("Data directory: %s\n", dbPath)
+	// Tune the Go runtime for the available memory and size the event budget.
+	eventBudget := configureMemory()
 
-	mainDB := &badger.BadgerBackend{
-		Path:     dbPath,
-		MaxLimit: 100,
-		BadgerOptionsModifier: func(opts badgerdb.Options) badgerdb.Options {
-			// Disable fsync on every write - significantly reduces write latency
-			// Safe for ephemeral data that expires in minutes
-			opts.SyncWrites = false
-			return opts
-		},
+	switch strings.ToLower(config.StorageBackend) {
+	case "badger":
+		dbPath := path.Join(config.WorkingDirectory, "database")
+		log.Printf("Storage: badger (persistent), data directory: %s", dbPath)
+		store = &badger.BadgerBackend{
+			Path:     dbPath,
+			MaxLimit: 100,
+			BadgerOptionsModifier: func(opts badgerdb.Options) badgerdb.Options {
+				// Disable fsync on every write - significantly reduces write latency
+				// Safe for ephemeral data that expires in minutes
+				opts.SyncWrites = false
+				return opts
+			},
+		}
+	default:
+		log.Printf("Storage: in-memory (ephemeral), budget %d MB, retention %d min",
+			eventBudget>>20, config.KeepNotesFor)
+		ms := NewMemStore(eventBudget, time.Duration(config.KeepNotesFor)*time.Minute)
+		go reportMemStats(ms)
+		store = ms
 	}
-	mainDB.Init()
+
+	if err := store.Init(); err != nil {
+		log.Fatalf("failed to initialize storage: %s", err)
+	}
 
 	relay.RejectCountFilter = append(relay.RejectCountFilter, func(ctx context.Context, filter nostr.Filter) (reject bool, msg string) {
 		return true, "blocked: we don't accept count filters"
 	})
 
 	relay.RejectFilter = append(relay.RejectFilter, func(ctx context.Context, filter nostr.Filter) (reject bool, msg string) {
-		if len(filter.Kinds) == 0 {
-			return true, "blocked: please add kind 24133 or 24135"
-		}
-
-		if len(filter.Authors) == 0 && len(filter.Tags["p"]) == 0 {
-			return true, "blocked: please add authors or #p"
-		}
-
-		for _, v := range filter.Kinds {
-			if v != 24133 && v != 24135 {
-				return true, "blocked: we only keep kind 24133 or 24135"
-			}
-		}
-
-		return false, ""
+		return rejectFilter(filter)
 	})
 
 	relay.RejectEvent = append(relay.RejectEvent, func(ctx context.Context, event *nostr.Event) (reject bool, msg string) {
@@ -133,13 +147,13 @@ func main() {
 	})
 
 	relay.OnEphemeralEvent = append(relay.OnEphemeralEvent, func(ctx context.Context, event *nostr.Event) {
-		if err := mainDB.SaveEvent(ctx, event); err != nil {
+		if err := store.SaveEvent(ctx, event); err != nil {
 			log.Printf("can't store event: %s\nerror: %s\n", event.String(), err.Error())
 		}
 	})
 
-	relay.QueryEvents = append(relay.QueryEvents, mainDB.QueryEvents)
-	relay.DeleteEvent = append(relay.DeleteEvent, mainDB.DeleteEvent)
+	relay.QueryEvents = append(relay.QueryEvents, store.QueryEvents)
+	relay.DeleteEvent = append(relay.DeleteEvent, store.DeleteEvent)
 
 	go cleanDatabase()
 
@@ -151,6 +165,12 @@ func main() {
 	server := &http.Server{
 		Addr:    config.RelayPort,
 		Handler: relay,
+		// Bound the time to read request headers to blunt slowloris-style
+		// attacks. Safe for WebSockets: it only applies to the HTTP handshake
+		// before the connection is hijacked for the relay, not to the long-lived
+		// socket afterwards. ReadTimeout/WriteTimeout are intentionally unset so
+		// they don't sever live connections.
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	go func() {
@@ -174,7 +194,7 @@ func main() {
 		log.Printf("HTTP server shutdown error: %s", err)
 	}
 
-	mainDB.Close()
+	store.Close()
 	log.Println("Shutdown complete")
 }
 
@@ -185,4 +205,29 @@ func staticViewHandler(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "Error executing template", http.StatusInternalServerError)
 		return
 	}
+}
+
+// rejectFilter decides whether to reject a subscription filter.
+//
+// NIP-46 signing traffic may only be read scoped to a specific pubkey or event
+// id - never as an unscoped firehose of everyone's messages. Any other filter
+// (kinds we don't store) is allowed and simply returns an empty EOSE: standard
+// relay behavior, and it lets relay monitors measure read latency instead of
+// seeing a rejection.
+func rejectFilter(filter nostr.Filter) (reject bool, msg string) {
+	// An open-kinds filter (no Kinds set) matches what we store, so it counts as
+	// potentially matching NIP-46 events.
+	matchesNip46 := len(filter.Kinds) == 0
+	for _, v := range filter.Kinds {
+		if v == 24133 || v == 24135 {
+			matchesNip46 = true
+		}
+	}
+
+	scoped := len(filter.Authors) > 0 || len(filter.Tags["p"]) > 0 || len(filter.IDs) > 0
+	if matchesNip46 && !scoped {
+		return true, "blocked: NIP-46 queries must be scoped by authors, #p, or ids"
+	}
+
+	return false, ""
 }

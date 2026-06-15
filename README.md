@@ -7,10 +7,11 @@ Based on [Bunklay](https://github.com/dezh-tech/ddsr) from dezh-tech.
 ## Features
 
 - **NIP-46 only** - Accepts only kind 24133 and 24135 events
-- **Ephemeral storage** - Events auto-expire (default: 10 minutes)
+- **In-memory by default** - Signing messages never touch disk; bounded, self-evicting buffer (default: 10 minutes)
+- **Memory-aware** - Respects a configured `GOMEMLIMIT`, or auto-detects the host/cgroup limit and sets one, so it stays within bounds even on a 1 GB box
 - **Timestamp validation** - Rejects events outside time window
 - **Lightweight** - Single binary, minimal dependencies
-- **BadgerDB** - Embedded database, no external services needed
+- **Optional persistence** - Set `STORAGE_BACKEND=badger` for an embedded on-disk store that survives restarts
 
 ## Quick Start
 
@@ -49,10 +50,12 @@ cp .env.example .env
 | `RELAY_ICON` | | URL to relay icon |
 | `RELAY_BANNER` | | URL to relay banner |
 | `RELAY_PORT` | `:3334` | Port to listen on |
-| `WORKING_DIR` | `./nip46-relay-data` | Data directory for BadgerDB |
+| `WORKING_DIR` | `./nip46-relay-data` | Data directory (only used when `STORAGE_BACKEND=badger`) |
 | `KEEP_IN_MINUTES` | `10` | Event retention time |
 | `ACCEPT_WINDOW_IN_MINUTES` | `1` | Timestamp validation window |
 | `RATE_LIMIT_PER_MINUTE` | `100` | Max events per minute per pubkey |
+| `STORAGE_BACKEND` | `memory` | `memory` (ephemeral, no disk) or `badger` (persists across restarts) |
+| `MAX_MEMORY_MB` | `0` | In-memory store byte budget in MB; `0` auto-detects (~50% of the effective memory limit) |
 
 ## Systemd Service
 

@@ -6,27 +6,32 @@ import (
 	"time"
 )
 
-// keyLimiter holds rate limit state for a single key with its own lock
+// keyLimiter holds token-bucket state for a single key with its own lock.
 type keyLimiter struct {
 	mu       sync.Mutex
-	requests []time.Time
+	tokens   float64
+	last     time.Time
 	lastUsed atomic.Int64 // Unix timestamp for cleanup decisions
 }
 
-// RateLimiter implements a sliding window rate limiter with per-key locking
-// Uses sync.Map to allow concurrent access to different keys without contention
+// RateLimiter is a per-key token-bucket limiter. Each key refills at
+// limit/window tokens per second up to a burst of `limit`, so checking a
+// request is O(1) in time and memory (no per-request slice scan).
+// sync.Map allows concurrent access to different keys without contention.
 type RateLimiter struct {
 	keys   sync.Map // map[string]*keyLimiter
-	limit  int
+	burst  float64
+	refill float64 // tokens per second
 	window time.Duration
 }
 
-// NewRateLimiter creates a new rate limiter
-// limit: max requests per window
+// NewRateLimiter creates a new rate limiter.
+// limit: max requests per window (also the burst size)
 // window: time window duration
 func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 	rl := &RateLimiter{
-		limit:  limit,
+		burst:  float64(limit),
+		refill: float64(limit) / window.Seconds(),
 		window: window,
 	}
 
@@ -36,14 +41,16 @@ func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 	return rl
 }
 
-// Allow checks if a request from the given key should be allowed
-// Uses per-key locking so different keys don't block each other
+// Allow checks if a request from the given key should be allowed.
+// Uses per-key locking so different keys don't block each other.
 func (rl *RateLimiter) Allow(key string) bool {
 	now := time.Now()
-	windowStart := now.Add(-rl.window)
 
-	// Get or create limiter for this key
-	val, _ := rl.keys.LoadOrStore(key, &keyLimiter{})
+	// Avoid allocating a new limiter for keys that already exist (the hot path).
+	val, ok := rl.keys.Load(key)
+	if !ok {
+		val, _ = rl.keys.LoadOrStore(key, &keyLimiter{tokens: rl.burst, last: now})
+	}
 	kl := val.(*keyLimiter)
 
 	// Update last used timestamp (atomic, no lock needed)
@@ -53,24 +60,19 @@ func (rl *RateLimiter) Allow(key string) bool {
 	kl.mu.Lock()
 	defer kl.mu.Unlock()
 
-	// Filter to only requests within the window
-	// Reuse slice capacity to reduce allocations
-	validRequests := kl.requests[:0]
-	for _, t := range kl.requests {
-		if t.After(windowStart) {
-			validRequests = append(validRequests, t)
+	// Refill tokens based on elapsed time, capped at the burst size.
+	if elapsed := now.Sub(kl.last).Seconds(); elapsed > 0 {
+		kl.tokens += elapsed * rl.refill
+		if kl.tokens > rl.burst {
+			kl.tokens = rl.burst
 		}
+		kl.last = now
 	}
 
-	// Check if limit exceeded
-	if len(validRequests) >= rl.limit {
-		kl.requests = validRequests
+	if kl.tokens < 1 {
 		return false
 	}
-
-	// Add current request
-	kl.requests = append(validRequests, now)
-
+	kl.tokens--
 	return true
 }
 

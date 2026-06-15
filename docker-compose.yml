@@ -5,18 +5,15 @@ services:
     restart: unless-stopped
     ports:
       - "3334:3334"
+    # Relay configuration comes from .env (copy .env.example to .env).
+    # Optional so `docker compose up` still works before you create it.
+    env_file:
+      - path: .env
+        required: false
     environment:
-      RELAY_NAME: "NIP-46 Relay"
-      RELAY_DESCRIPTION: "A NIP-46 remote signing relay"
-      RELAY_URL: "wss://your-domain.com"
-      RELAY_PORT: ":3334"
+      # Container-specific path; overrides .env so data lands in the volume.
+      # Only used when STORAGE_BACKEND=badger.
       WORKING_DIR: "/app/data"
-      KEEP_IN_MINUTES: 10
-      ACCEPT_WINDOW_IN_MINUTES: 1
-      RATE_LIMIT_PER_MINUTE: 100
-      # RELAY_PUBKEY: "your_hex_pubkey"
-      # RELAY_CONTACT: "your@email.com"
-      # RELAY_ICON: "https://your-domain.com/icon.png"
     volumes:
       - nip46_data:/app/data
 
